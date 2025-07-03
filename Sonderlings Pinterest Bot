@@ -1,0 +1,203 @@
+import os
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from dotenv import load_dotenv
+from datetime import datetime
+
+# Lade Umgebungsvariablen
+load_dotenv()
+
+# Logging einrichten
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+class TelegramMediaBot:
+    def __init__(self):
+        self.token = os.getenv("BOT_TOKEN")
+        self.allowed_users = [int(x) for x in os.getenv("ALLOWED_USERS", "").split(",") if x]
+        self.max_file_size = int(os.getenv("MAX_FILE_SIZE", "50"))
+        
+        # Zielkanäle
+        self.channels = {
+            "photos": os.getenv("PHOTO_CHANNEL", "@sonderling_fotos"),
+            "videos": os.getenv("VIDEO_CHANNEL", "@sonderling_videos"),
+            "documents": os.getenv("DOC_CHANNEL", "@sonderling_docs"),
+            "general": os.getenv("GENERAL_CHANNEL", "@sonderling_all")
+        }
+    
+    def is_user_allowed(self, user_id):
+        """Prüfe Berechtigung"""
+        return not self.allowed_users or user_id in self.allowed_users
+    
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start Command"""
+        user_id = update.effective_user.id
+        
+        if not self.is_user_allowed(user_id):
+            await update.message.reply_text("❌ Du bist nicht berechtigt, diesen Bot zu verwenden.")
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("📸 Foto posten", callback_data="help_photo")],
+            [InlineKeyboardButton("🎥 Video posten", callback_data="help_video")],
+            [InlineKeyboardButton("📄 Dokument posten", callback_data="help_document")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "🤖 **Sonderling's Media Bot**\n\n"
+            "Sende mir Medien und ich poste sie automatisch in die konfigurierten Kanäle!\n\n"
+            "✅ Unterstützte Formate:\n"
+            "📸 Bilder (JPG, PNG, GIF, WebP)\n"
+            "🎥 Videos (MP4, AVI, MOV, MKV)\n"
+            "📄 Dokumente (PDF, ZIP, TXT)\n\n"
+            f"📊 Max. Dateigröße: {self.max_file_size}MB",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+    
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle Callback Queries"""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "help_photo":
+            await query.edit_message_text("📸 **Foto-Hilfe**\n\nSende einfach ein Bild und ich poste es automatisch in die Foto-Kanäle!", parse_mode="Markdown")
+        elif query.data == "help_video":
+            await query.edit_message_text("🎥 **Video-Hilfe**\n\nSende ein Video und ich poste es automatisch in die Video-Kanäle!", parse_mode="Markdown")
+        elif query.data == "help_document":
+            await query.edit_message_text("📄 **Dokument-Hilfe**\n\nSende eine Datei und ich poste sie automatisch in die Dokument-Kanäle!", parse_mode="Markdown")
+    
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle Photos"""
+        if not self.is_user_allowed(update.effective_user.id):
+            return
+        
+        photo = update.message.photo[-1]
+        
+        # Größe prüfen
+        if photo.file_size > self.max_file_size * 1024 * 1024:
+            await update.message.reply_text(
+                f"❌ Bild zu groß! Max: {self.max_file_size}MB"
+            )
+            return
+        
+        # In Kanäle posten
+        posted_channels = []
+        caption = f"📸 Von: {update.effective_user.first_name}\n📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        
+        for channel_type, channel_id in self.channels.items():
+            if channel_type in ["photos", "general"]:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=channel_id,
+                        photo=photo.file_id,
+                        caption=caption
+                    )
+                    posted_channels.append(channel_id)
+                except Exception as e:
+                    logger.error(f"Fehler beim Posten in {channel_id}: {e}")
+        
+        await update.message.reply_text(
+            f"✅ Foto gepostet in {len(posted_channels)} Kanäle!"
+        )
+    
+    async def handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle Videos"""
+        if not self.is_user_allowed(update.effective_user.id):
+            return
+        
+        video = update.message.video
+        
+        if video.file_size > self.max_file_size * 1024 * 1024:
+            await update.message.reply_text(
+                f"❌ Video zu groß! Max: {self.max_file_size}MB"
+            )
+            return
+        
+        posted_channels = []
+        caption = f"🎥 Von: {update.effective_user.first_name}\n📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        
+        for channel_type, channel_id in self.channels.items():
+            if channel_type in ["videos", "general"]:
+                try:
+                    await context.bot.send_video(
+                        chat_id=channel_id,
+                        video=video.file_id,
+                        caption=caption
+                    )
+                    posted_channels.append(channel_id)
+                except Exception as e:
+                    logger.error(f"Fehler beim Posten in {channel_id}: {e}")
+        
+        await update.message.reply_text(
+            f"✅ Video gepostet in {len(posted_channels)} Kanäle!"
+        )
+    
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle Documents"""
+        if not self.is_user_allowed(update.effective_user.id):
+            return
+        
+        document = update.message.document
+        
+        if document.file_size > self.max_file_size * 1024 * 1024:
+            await update.message.reply_text(
+                f"❌ Datei zu groß! Max: {self.max_file_size}MB"
+            )
+            return
+        
+        posted_channels = []
+        caption = f"📄 {document.file_name}\n👤 Von: {update.effective_user.first_name}\n📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        
+        for channel_type, channel_id in self.channels.items():
+            if channel_type in ["documents", "general"]:
+                try:
+                    await context.bot.send_document(
+                        chat_id=channel_id,
+                        document=document.file_id,
+                        caption=caption
+                    )
+                    posted_channels.append(channel_id)
+                except Exception as e:
+                    logger.error(f"Fehler beim Posten in {channel_id}: {e}")
+        
+        await update.message.reply_text(
+            f"✅ Dokument gepostet in {len(posted_channels)} Kanäle!"
+        )
+
+def main():
+    """Hauptfunktion"""
+    bot = TelegramMediaBot()
+    
+    if not bot.token:
+        logger.error("BOT_TOKEN nicht gefunden!")
+        return
+    
+    # Application erstellen
+    application = Application.builder().token(bot.token).build()
+    
+    # Handler hinzufügen
+    application.add_handler(CommandHandler("start", bot.start))
+    application.add_handler(CallbackQueryHandler(bot.handle_callback))
+    application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
+    application.add_handler(MessageHandler(filters.VIDEO, bot.handle_video))
+    application.add_handler(MessageHandler(filters.DOCUMENT, bot.handle_document))
+    
+    # Bot starten
+    logger.info("🤖 Bot startet auf Railway...")
+    
+    # Railway verwendet einen PORT
+    port = int(os.environ.get("PORT", 8080))
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        webhook_url=f"https://your-app-name.railway.app/"
+    )
+
+if __name__ == "__main__":
+    main()
